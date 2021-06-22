@@ -1,0 +1,69 @@
+import {
+    ClientMetricsService,
+    IClientApp,
+} from '../../../lib/services/client-metrics';
+
+const test = require('ava');
+const faker = require('faker');
+const dbInit = require('../helpers/database-init');
+const getLogger = require('../../fixtures/no-logger');
+const { APPLICATION_CREATED } = require('../../../lib/types/events');
+
+let stores;
+let db;
+let clientMetricsService;
+
+test.before(async () => {
+    db = await dbInit('client_metrics_service_serial', getLogger);
+    stores = db.stores;
+    clientMetricsService = new ClientMetricsService(
+        stores.clientMetricsStore,
+        stores.strategyStore,
+        stores.featureToggleStore,
+        stores.clientApplicationsStore,
+        stores.clientInstanceStore,
+        stores.eventStore,
+        getLogger,
+        500,
+        2000,
+    );
+});
+
+test.after(async () => {
+    await db.destroy();
+});
+test.serial('Apps registered should be announced', async t => {
+    t.plan(3);
+    const clientRegistration: IClientApp = {
+        appName: faker.internet.domainName(),
+        instanceId: faker.datatype.uuid(),
+        strategies: ['default'],
+        started: Date.now(),
+        interval: faker.datatype.number(),
+        icon: '',
+        description: faker.company.catchPhrase(),
+        color: faker.internet.color(),
+    };
+    const differentClient = {
+        appName: faker.lorem.slug(2),
+        instanceId: faker.datatype.uuid(),
+        strategies: ['default'],
+        started: Date.now(),
+        interval: faker.datatype.number(),
+        icon: '',
+        description: faker.company.catchPhrase(),
+        color: faker.internet.color(),
+    };
+    await clientMetricsService.registerClient(clientRegistration, '127.0.0.1');
+    await clientMetricsService.registerClient(differentClient, '127.0.0.1');
+    await new Promise(res => setTimeout(res, 1200));
+    const first = await stores.clientApplicationsStore.getUnannounced();
+    t.is(first.length, 2);
+    await clientMetricsService.registerClient(clientRegistration, '127.0.0.1');
+    await new Promise(res => setTimeout(res, 2000));
+    const second = await stores.clientApplicationsStore.getUnannounced();
+    t.is(second.length, 0);
+    const events = await stores.eventStore.getEvents();
+    const appCreatedEvents = events.filter(e => e.type === APPLICATION_CREATED);
+    t.is(appCreatedEvents.length, 2);
+});
